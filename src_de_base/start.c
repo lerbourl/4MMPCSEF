@@ -1,26 +1,28 @@
 #include <cpu.h>
 #include <inttypes.h>
 #include <string.h>
+#include <stdio.h>
+#include "segment.h"
+#include <stdbool.h>
 
 #define FOND 7
 #define COULEUR 12
 #define W 80
 #define H 25
+#define QUARTZ 0x1234DD
+#define CLOCKFREQ 50
 
-// on peut s'entrainer a utiliser GDB avec ce code de base
-// par exemple afficher les valeurs de x, n et res avec la commande display
+/*
+ * varibles globales de temps
+ */
+uint32_t sec = 0;
+uint32_t min = 0;
+uint32_t heu = 0;
+uint32_t compteur_pit = 0;
 
-// une fonction bien connue
-uint32_t fact(uint32_t n)
-{
-    uint32_t res;
-    if (n <= 1) {
-        res = 1;
-    } else {
-        res = fact(n - 1) * n;
-    }
-    return res;
-}
+/*
+ * Séance 1 : l'écran
+ */
 
 uint16_t *ptr_mem(uint32_t lig, uint32_t col){
     return ((uint16_t*)0xB8000) + col + lig * W;
@@ -122,21 +124,91 @@ void console_putbytes(char *chaine, int32_t taille){
     for(i = 0 ; i < taille ; i++) traite_car(chaine[i]);
 }
 
-void kernel_start(void)
-{
-    uint32_t len;
-    //char chaine[2000] = "bonjour\nlo\buis\tfin";
-    char chaine[2000] = "YOOOOOOOOOOO\n";
-    len = 18;
-    efface_ecran();
-    console_putbytes(chaine, len);
-    int i;
-    for(i = 0 ; i < 30 ; i++){
-        console_putbytes(chaine, len);
+/*
+ * Séance 2 : Gestion du temps
+ */
+
+void topright_print(char* chaine){
+    uint32_t lig, col;
+    curseur_get(&lig, &col);
+    place_curseur(0, 71);
+    printf("%s", chaine);
+    place_curseur(lig, col);
+}
+
+void tic_PIT(void){
+    outb(0x20, 0x20);
+    compteur_pit ++;
+    if (compteur_pit > 50){
+        char chaine[8];
+        compteur_pit = 0;
+        sec++;
+        if (sec > 60){
+            sec = 0;
+            min++;
+            if (min > 60){
+                min = 0;
+                heu++;
+            }
+        }
+        sprintf(chaine, "%2d:%2d:%2d", heu, min, sec);
+        topright_print(chaine);
     }
-    // on ne doit jamais sortir de kernel_start
+}
+
+extern void traitant_IT_32(void);
+
+void init_traitant_IT(int32_t num_IT, void (*traitant)(void)){
+    /*uint16_t *adress = (uint16_t*)0x1000;
+    adress += 4 * num_IT;
+    *adress = KERNEL_CS;
+    adress++;
+    *adress = (uint16_t)traitant;
+    adress++;
+    *adress = (uint16_t)(traitant >> 16);
+    adress++;
+    *adress = 0x8E00;
+    */
+    int32_t * adr_table =(int32_t *)0x1000;
+    adr_table+= num_IT*2;
+    int32_t mot1=(((int32_t)KERNEL_CS)<<16) | ((int32_t)((int32_t)traitant %65536));
+    int32_t mot2=(int32_t)((int32_t)((int32_t)traitant>>16)<<16) | (int32_t)0x8E00;
+    *adr_table=mot1;
+    *(adr_table+1)=mot2;
+    }
+
+
+void masque_IRQ(uint32_t num_IRQ, uint32_t masque){
+    uint8_t IRQ_byte;
+    IRQ_byte = inb(0x21);
+    if ((uint8_t)masque != (uint8_t)((IRQ_byte & ( 1 << num_IRQ)) >> num_IRQ)){
+        IRQ_byte ^= 1 << num_IRQ;
+        outb(IRQ_byte, 0x21);
+    }
+}
+
+void kernel_start(void){
+    // initialisations
+    // table des interruptions
+    init_traitant_IT(32, traitant_IT_32);
+
+    // démasquage de IR0
+    masque_IRQ(0, 0);
+    int8_t mask = inb(0x21);
+    (void) mask;
+
+    //fréquence de l'horloge
+    outb(0x34, 0x43);
+    int16_t val = (0x1234DD/50);
+    outb(val%256, 0x40);
+    outb((uint8_t)(val >> 8), 0x40);
+
+    efface_ecran();
+    // démasquage des interruptions externes
+    sti();
+
+    // boucle d’attente
     while (1) {
-        // cette fonction arrete le processeur
         hlt();
     }
 }
